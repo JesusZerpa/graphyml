@@ -1,0 +1,31 @@
+{
+	"<MUTATION>":"create_user",//es la que sabe a que modelo se le aplica la operacion
+	"<GET>":{
+		"$User.name":{"$op":"lower"},
+		"$User.email":{"$op":"upper"}
+	},
+	"<POST>":{
+		"username":"yorvy",
+		"email":"yorvy@gmail.com",
+		"password":"123456789"
+	}
+}
+
+//
+{
+    "<MUTATION>":"get_users",
+    //lo que filtra a la hora de aplicar el post
+    "<QUERY>":{
+
+    },
+    //La respuesta que devuelve
+	"<GET>":{
+
+		"$filter":{}
+	},
+	"<POST>":{
+		"username":"yorvy",
+		"email":"yorvy@gmail.com",
+		"password":"123456789"
+	}
+}
