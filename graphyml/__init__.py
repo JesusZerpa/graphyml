@@ -27,7 +27,7 @@ class Manager(object):
         self.repository.save(instance)
 
     def __call__(self,**query):
-        print("@@@@@@@@@@@",dir(self.model.__class__))
+
         item=self.model(**query)
         for key in dir(self.model.__class__):
             field=getattr(self.model.__class__,key)
@@ -121,10 +121,12 @@ class Schema:
             }
         }
         """
+
         if  mutation in dir(self.mutations):
             try:
                 return getattr(self.mutations,mutation)(query,post)
             except Exception as e:
+                e.mutation=mutation
                 return e
         # import pyyaml module
     def set_user(self,user):
@@ -150,7 +152,7 @@ class Schema:
             
             
             raw=line.split(" ")
-            print(">>>>",raw)
+       
             if " " in raw:
                 raw.remove(" ")
             _model,*permissions=raw
@@ -167,7 +169,7 @@ class Schema:
                     for perm in field_permissions:
                         if perm not in user.permissions:
                             data.pop(name)
-        print("yyyyyyy",data)
+ 
         for field in fields:
             data.pop(field)
         return data
@@ -185,7 +187,7 @@ class Schema:
             items=json.loads(dumps(list(data)))
             for item in items:
                 d={}
-                for elem in items[0]:
+                for elem in item:
                     d[elem[0]]=elem[1]
                 l.append(self.clear(d,model))
 
