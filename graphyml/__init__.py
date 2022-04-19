@@ -88,55 +88,84 @@ class Manager(object):
 
 
 class Mutation:
+    """
+    las mutaciones api retornan una instancia o None
+    las mutaciones api son compatibles con las sockets
+    las mutaciones socket solo son comatibles con socket
+
+    en las mutaciones de socket GET pasa a ser MESSAGE
+    tambien tiene TARGETS
+
+    """
     Manager=Manager
     _repositories=[]
     _models=[]
     def __init__(self):
    
         self.manager=self.Manager(self.Meta.repository)
-    def _create(self,model,data):
+    
+    def _create(self,query,data):
+        
         _model=self.model(model)
         d=data.copy()
-        for elem in _model.__annotations__:
-            if type(_model.__annotations__[elem])==ModelMetaclass:
-                submodel=_model.__annotations__[elem].__name__.lower()
-                _submodel=self.model(submodel)
-                d[elem]=_submodel.find_one({"id":data[elem]})
+        def callback(model,query,data):
 
-        return _model(**d)
-    def _modify(self,model,data):
-        for elem in _model.__annotations__:
-            if type(_model.__annotations__[elem])==ModelMetaclass:
-                submodel=_model.__annotations__[elem].__name__.lower()
-                _submodel=self.model(submodel)
-                d[elem]=_submodel.update_one({"id":data[elem]["id"]},data[elem])
-                
+            for elem in _model.__annotations__:
+                if type(_model.__annotations__[elem])==ModelMetaclass:
+                    submodel=_model.__annotations__[elem].__name__.lower()
+                    _submodel=self.model(submodel)
+                    d[elem]=_submodel.find_one({"id":data[elem]})
+            return _model(**d)
+        
+        if type(data)==list:
+            for model,dataset in data:
+                callback(model.lower(),query,dataset)
+        else:
+            callback(list(query)[0].lower(),query,data)
+    
+    def _modify(self,query,data):
+        def callback(model,query,data):
+            _model=self.model(model)
+            d=data.copy()
 
-    def _delete(self,model,query):
+            for elem in _model.__annotations__:
+                if type(_model.__annotations__[elem])==ModelMetaclass:
+                    submodel=_model.__annotations__[elem].__name__.lower()
+                    _submodel=self.model(submodel)
+                    d[elem]=_submodel.update_one({"id":data[elem]["id"]},data[elem])
+                    
+        if type(data)==list:
+            for model,dataset in data:
+                callback(model.lower(),query,dataset)
+        else:
+            callback(list(query)[0].lower(),query,data)
+        
 
-        self.repository(submodel).delete(query)
+    def _delete(self,query):
+        for model in query:
+            self.repository(model.lower()).delete(query[model])
+
     def _evaluate(self,op,perm,query):
         #por defecto los permisos de edicion de campos tienen que estar agregados
         #tambien es gerarquico si usa Model@modify_others quivala a Model.\w+@modify_others
 
         # modify=$set, rename=$rename, max=$max, remove=$unset, increment=$incr  
         import re
-        print("nnnnnnnn")
+
+        if self._schema.user.is_superuser:
+            return True
         
         def check(op):
-
-            self._schema.has_perm(model+f"@{op}_own")
-            self._schema.has_perm(model+f"@{op}_others")
             #user
-            user_others=re.match(rf"User.(\w+)@{op}_others",perm)
-            user_own=re.match(rf"User.(\w+)@{op}_own",perm)
+            user_others=re.findall(rf"User\.(\w+)@{op}_others",perm)
+            user_own=re.findall(rf"User\.(\w+)@{op}_own",perm)
             
             #pertenencia 
             #permisologia
             
-            model_others=re.match(rf"(\w+).(\w+)@{op}_others",perm) #tiene accesso en el campo user.permission
-            model_own=re.match(rf"(\w+).(\w+)@{op}_own",perm) #tiene un campo referenciando al usuario
-            print("cccccccc",user_others,user_own,model_others,model_own)
+            model_others=re.findall(rf"(\w+)\.(\w+)@{op}_others",perm) #tiene accesso en el campo user.permission
+            model_own=re.findall(rf"(\w+)\.(\w+)@{op}_own",perm) #tiene un campo referenciando al usuario
+            
             if user_others:
 
                 if self._schema.has_perm(f"User@{op}_others"):
@@ -181,7 +210,8 @@ class Mutation:
                             return True
 
             elif model_own:
-                if self._schema.has_perm(model_others[0]+f"@{op}_own"):
+                model=model_own[0].lower()
+                if self._schema.has_perm(model_own[0]+f"@{op}_own"):
                     if not self.user.permissions[perm]:
                         return True
                     else:
@@ -190,13 +220,12 @@ class Mutation:
                             return True
                 
                 elif self._schema.has_perm(perm):
-                    model=model_others[0]
+          
                     items=self.repository(model).find(query)
                     if self.schema.user.id in [item.user.id for item in items]:
                         return True
-        print(">>>>>>>>>>>",op)
+        
         if op=="create":
-            print("aaaaaa",self._schema.has_perm(perm))
             return self._schema.has_perm(perm)
                 
         elif op=="rename":
@@ -213,19 +242,19 @@ class Mutation:
     
     async def post(self,query,data):
 
+        self._modify(query,data)
+        """
         for model in query:
             if query[model]:
-                self.repository(model).update(query[model],data)
+               
+                self.repository(model.lower()).update(query[model],data)
             else:
-                instance=self.model(model)(data)
-                self.repository(model).save(instance)
-                
+                instance=self.model(model.lower())(data)
+                self.repository(model.lower()).save(instance)
+        """     
 
-
-    async def get(self,query,data):
-        pass
     async def delete(self,query,data):
-        self.repository()
+        self._delete(query)
 
 
     def repository(self,name):
@@ -303,7 +332,7 @@ class Schema:
         return self.sio
 
 
-    async def _process(self,user,mutation,query=None,post=None):
+    async def _process(self,user,mutation,query=None,post=None,message=None,target=True):
         """
         {
             {
@@ -319,21 +348,23 @@ class Schema:
             }
         }
         """
-
+        print("ffffff",dir(self.mutations))
         if  mutation in dir(self.mutations):
             try:
 
-                if post or query:
+                print(bool(post or query or message),post or query or message)
+                if post or query or message:
                   
                     m=getattr(self.mutations,mutation)
 
                     if self.user:
-                  
+                        print("vvvvvvv",query)
                         if "$set" in post:
                             for field in post["$set"]:
+                                print("eeeeee",list(query)[0],field)
                                 valid=self.mutations._evaluate(
                                     "modify",
-                                    query.keys()[0]+"."+field+"@modify",query)
+                                    list(query)[0]+"."+field+"@modify",query)
                                 if not valid:
                                     raise Exception("No tienes permisos suficientes")
                         elif post and query:
@@ -344,28 +375,40 @@ class Schema:
                                 raise Exception("No tienes permisos suficientes")
                         else:
                             raise Exception("Operaciones por el momento no permitidas")
-                        return await m(query,post)
+                        print("uuuuuu",m.__code__.co_varnames)
+                        if m.__code__.co_varnames[1]=="message":
+                            return await m(message,query,post,target)
+                        else:
+                            return await m(query,post)
                 
                     elif "without_login" in dir(m):
 
                         # Pendiente de las mutaciones que no son por usuarios
                         # ejemplo publicaciones de anonimas 
-                        
-                        return await m(query,post)
+                        if m.__code__.co_varnames[1]=="message":
+                            return await m(message,query,post,target)
+                        else:
+                            return await m(query,post)
+
                     else:
                        
                         raise Exception("Necesitas inciar sesion")
-                
+               
+
 
             except Exception as e:
+                print("tttttttt",e)
                 import traceback
                 from io import  StringIO
                 s=StringIO()
                 traceback.print_exc(file=s)
                 s.seek(0)
                 msg=s.read()
+                print(msg)
                 e.mutation=Exception(msg)
                 return e
+        else:
+            print("mutacion no encontrada: ",mutation)
         # import pyyaml module
     def set_user(self,user):
         self.user=user
@@ -501,7 +544,7 @@ class Schema:
                 else:
                     response["error"]=f"Ocurrio un error en la mutacion {instance.mutation}"
                     status=500
-            print("ffffff",l)
+            
             if len(l)>1:
                 response["response"]=l
                 
@@ -509,8 +552,25 @@ class Schema:
                 response["response"]=l[0][1]
                 
             return self.jsonify(response),status
+        elif "<MESSAGE>" in data:
+            print("@@@@@@@@@@@@@@@@@@",data)
+            await self._process(
+                user=self.user,
+                mutation=data["<MUTATION>"],
+                query=data["<QUERY>"] if "<QUERY>" in data else None, 
+                post=data["<DATA>"],
+                message=data["<MESSAGE>"],
+                target=data["<TARGET>"]
+                )
 
-    async def run(self,request,jsonify,abort,verify_password=None):
+    def _emit(self,event,message,target=True):
+        if type(target)==bool:
+            self.sio.broadcast.emit(event,message)
+        else:
+            for conn in target:
+                self.sio
+
+    async def run(self,request,jsonify,abort,verify_password=None,ws=False):
         import datetime
         self.jsonify=jsonify
         self.abort=abort
@@ -537,8 +597,10 @@ class Schema:
 
                 self.user_manager.save(user)
                 return jsonify(obj_token)
+            else:
+                return jsonify({"token":None,"expire":None,"perms":{}}),404
 
-            return abort(404)
+            
         elif 'x-access-tokens' in request.headers:
             token = request.headers['x-access-tokens']
             user=self.user_manager.find_one(**{"tokens":{
