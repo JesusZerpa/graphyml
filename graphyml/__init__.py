@@ -3,41 +3,259 @@ from pydantic.main import ModelMetaclass
 from dataclasses import dataclass
 
 privates={}
-
 public={}
+requests={}
+schema=None
 
 @dataclass
 class Model:
-    pass
+    def __init__(self,**fields):
+        super(Model).__init__()
+        print("BBBBBBBBB",fields)
+        for elem in self.__annotations__:
+            if elem in fields:
+                 setattr(self,elem,fields[elem])
+            else:
+                if callable(self.__annotations__[elem]):
+                    setattr(self,elem,self.__annotations__[elem]())
+              
+        self.emit("pre_create",self)
+    def on_pre_create(self,ctx):
+        #schema.mutations
+        pass   
+    def on(self,name):
+        def wrapper(callback):
+            setattr(self,"on_"+name,callback)
+        return wrapper
+
+    def emit(self,event,data):
+        if "on_"+event in dir(self):
+            getattr(self,"on_"+event)(data)
+
+
+
+    
+
 class Repository:
-    def __init__(self):
-        pass
-    def save(self,instance):
-        if instance.id:
-            if self.Meta.private:
-                if self.Meta.to_array:
+
+    def __init__(self,instance:Model):
+        self.instance=instance
+
+        self.save=lambda:self.__class__.save(self.instance)
+
+    @classmethod
+    def _update(cls,query,data,table,many=True):
+        if cls.Meta.private:
+            private[cls.Meta.model.__name__]={}
+        else:
+            public[cls.Meta.model.__name__]={}
+        fields=list(self.Meta.model.__annotations__)
+        for elem in query:
+            i=fields.index(elem)
+            _field=table[i]
+            if elem in cls.Meta.vectors:
+                v=cls.Meta.vectors[elem].index(query[elem])
+                ixs=[ fields.index(elem) for elem in data]
+                if many:
+                    table[_field == v ][ixs] = [cls.Meta.vectors[elem].index(data[elem]) for elem in data ]
+                else:
+                    table[_field == v ][ixs][0] = [cls.Meta.vectors[elem].index(data[elem]) for elem in data ]
+    @classmethod
+    def _find(cls,query,table,many=True):
+        if cls.Meta.private:
+            private[cls.Meta.model.__name__]={}
+        else:
+            public[cls.Meta.model.__name__]={}
+        fields=list(cls.Meta.model.__annotations__)
+        l=[]
+        for elem in query:
+            i=fields.index(elem)
+            _field=table[i]
+            if elem in cls.Meta.vectors:
+                v=cls.Meta.vectors[elem].index(query[elem])
+                if many:
+                    l.append(table[_field == v ])
+                else:
+                    return table[_field == v ]
+        return l 
+
+    @classmethod
+    def find(cls,**query):
+        global public,private
+        if cls.Meta.private:
+            private[cls.Meta.model.__name__]={}
+        else:
+            public[cls.Meta.model.__name__]={}
+        if cls.Meta.private:
+            if cls.Meta.model.__name__ not in privates:
+                return None
+            if cls.Meta.to_array:
+                return cls._find(query,privates[cls.Meta.model.__name__])
+        else:
+            if cls.Meta.model.__name__ not in public:
+                return None
+            if cls.Meta.to_array:
+                return cls._find(query,public[cls.Meta.model.__name__])
+            else:
+                for elem in public[cls.Meta.model.__name__]:
+                    for field in query:
+                        if elem[field]!=query[field]:
+                            break
+                    else:
+                        yield elem
+    @classmethod
+    def find_one(cls,**query):
+        global public,private
+        if "private" not in dir(cls.Meta):
+            cls.Meta.private=False
+
+        if cls.Meta.private:
+            if cls.Meta.model.__name__ not in privates:
+                return None
+            if cls.Meta.to_array:
+                return cls._find(query,privates[cls.Meta.model.__name__],False)
+            else:
+                
+                for elem in public[cls.Meta.model.__name__]:
+                    for field in query:
+                        if elem[field]!=query[field]:
+                            break
+                    else:
+                        return elem
+        else:
+            if cls.Meta.model.__name__ not in public:
+                return None
+            if cls.Meta.to_array:
+                return cls._find(query,public[cls.Meta.model.__name__],False)
+            else:
+               
+                for item in public[cls.Meta.model.__name__].values():
+                    for field in query:
+                        if getattr(item,field)!=query[field]:
+                            break
+                    else:
+                       
+                        return item
+
+    @classmethod
+    def update_one(cls,query,data):
+        if cls.Meta.private:
+            if cls.Meta.model.__name__ not in private:
+                raise Exception(f"No inicreate collection '{cls.Meta.model.__name__}'")
+            private[cls.Meta.model.__name__]={}
+        else:
+            if cls.Meta.model.__name__ not in public:
+                raise Exception(f"No inicreate collection '{cls.Meta.model.__name__}'")
+            public[cls.Meta.model.__name__]={}
+        if cls.Meta.private:
+            if cls.Meta.model.__name__ not in privates:
+                raise Exception(f"No existen registros en la colleccion '{cls.Meta.model.__name__}'")
+            if cls.Meta.to_array:
+                cls._update(query,data,privates[cls.Meta.model.__name__],False)
+        else:
+            if cls.Meta.model.__name__ not in privates:
+                raise Exception(f"No existen registros en la colleccion '{cls.Meta.model.__name__}'")
+            if cls.Meta.to_array:
+                cls._update(query,data,public[cls.Meta.model.__name__],False)
+        
+    @classmethod
+    def update(cls,query,data):
+        """
+        {id:5},{"kind":"Animal"}
+        """
+        if cls.Meta.private:
+            private[cls.Meta.model.__name__]={}
+        else:
+            public[cls.Meta.model.__name__]={}
+        
+        if cls.Meta.private:
+            if cls.Meta.model.__name__ not in privates:
+                raise Exception(f"No existen registros en la colleccion '{cls.Meta.model.__name__}'")
+            if cls.Meta.to_array:
+                cls._update(query,data,privates[cls.Meta.model.__name__])
+
+        else:
+            if cls.Meta.model.__name__ not in privates:
+                raise Exception(f"No existen registros en la colleccion '{cls.Meta.model.__name__}'")
+            if cls.Meta.to_array:
+                cls._update(query,data,public[cls.Meta.model.__name__])
+                
+    @classmethod
+    def save(cls,instance):
+        import numpy as np
+        global public,private
+        if "private" not in dir(cls.Meta):
+            cls.Meta.private=False
+        if "to_array" not in dir(cls.Meta):
+            cls.Meta.to_array=True
+      
+        if cls.Meta.private:
+            if cls.Meta.to_array:
+                private[cls.Meta.model.__name__]=np.asarray([])
+            else:
+                private[cls.Meta.model.__name__]={}
+        else:
+            if cls.Meta.to_array:
+                public[cls.Meta.model.__name__]=np.asarray([])
+            else:
+                public[cls.Meta.model.__name__]={}
+        if "id" in dir(instance):
+      
+            if cls.Meta.private:
+                if cls.Meta.to_array:
                     l=[]
                     for x in instance.__annotations__:
-                        if instance.__annotations__[key]==int:
-                            l.append(getattr(instance,key))
-                    privates[self.Meta.model.__name__][instance.id]=np.asarray(l)
+                        if instance.__annotations__[x]==int:
+                            l.append(getattr(instance,x))
+                    privates[cls.Meta.model.__name__][instance.id]=np.asarray(l)
                 else:
-                    pass
+                    privates[cls.Meta.model.__name__][instance.id]=instance
             else:
-                pass
+                if cls.Meta.to_array:
+                    l=[]
+                    for x in instance.__annotations__:
+                        if instance.__annotations__[x]==int:
+                            l.append(getattr(instance,x))
+     
+                    public[cls.Meta.model.__name__][instance.id]=np.asarray(l)
+                else:
+                    public[cls.Meta.model.__name__][instance.id]=instance
+                 
         else:
-            if self.Meta.private:
-                if self.Meta.model.__name__ not in privates:
-                    if self.Meta.to_array:
-                        l=[]
-                        for x in instance.__annotations__:
-                            if instance.__annotations__[key]==int:
-                                l.append(getattr(instance,key))
-                        
-                        privates[self.Meta.model.__name__]= np.concatenate(
-                            privates[self.Meta.model.__name__],
-                            np.asarray(l)
-                            )
+            if cls.Meta.private:
+            
+                if cls.Meta.to_array:
+                    l=[]
+                    for x in instance.__annotations__:
+                        if instance.__annotations__[x]==int:
+                            l.append(getattr(instance,x))
+                    
+                    privates[cls.Meta.model.__name__]= np.append(
+                        privates[cls.Meta.model.__name__],
+                        [l]
+                        )
+                else:
+                    id=len(privates[cls.Meta.model.__name__])
+                    privates[cls.Meta.model.__name__][id]=instance
+            else:
+               
+                if cls.Meta.to_array:
+                    l=[]
+                    for x in instance.__annotations__:
+                        if instance.__annotations__[x]==int:
+                            l.append(getattr(instance,x))
+                    
+                    public[cls.Meta.model.__name__]= np.append(
+                        public[cls.Meta.model.__name__],
+                        [l]
+                        )
+                else:
+
+                    id=len(public[cls.Meta.model.__name__])
+                    public[cls.Meta.model.__name__][id]=instance
+                   
+
+
                  
 
 class GraphymlMutation:
@@ -49,9 +267,61 @@ def need_login(fn):
     fn.need_login=True
     return fn
 
-def Request(environ):
+def Request(environ,sid):
+    
     request=type("request",(),environ["asgi.scope"])()
-    request.headers={k.decode("utf-8"):v for k,v in request.headers}
+
+    request.headers={k.decode("utf-8"):v.decode("utf-8") for k,v in request.headers}
+    from urllib.parse import urlparse, parse_qs
+
+    parsed_url = urlparse(request.query_string)
+    request.query=parse_qs(request.query_string.decode("utf-8"))
+    request.sid=sid
+
+    request.namespace=request.query["namespace"][0]
+    requests[sid]=request
+    if 'Authorization' in request.headers:
+        import base64
+
+        from uuid import uuid4
+  
+        token = request.headers['Authorization'].split(" ")[-1]
+   
+        user,password=base64.b64decode(token).decode("utf-8").split(":") 
+        
+        user=schema.user_manager.find_one(username=user)
+
+        if verify_password(user.password,password):
+            obj_token={"token":str(uuid4()),
+                "expire":datetime.datetime.today() + datetime.timedelta(days=1),
+                "perms":user.permissions,
+                "id":str(user.id),
+                "username":user.username,
+                "email":user.email}
+            tokens=user.tokens
+            tokens.append(obj_token)
+            user.tokens=tokens
+            print(obj_token)
+
+
+
+            schema.user_manager.save(user)
+            return jsonify(obj_token)
+        else:
+            return jsonify({"token":None,"expire":None,"perms":{}}),404
+
+        
+    elif 'x-access-tokens' in request.headers:
+        token = request.headers['x-access-tokens']
+        print("OOOOOOOOOOOOOOOOOOO",schema)
+        
+        user=schema.user_manager.find_one(**{"tokens":{
+            "$elemMatch":{"token":token}}
+            })
+
+        request.user=user
+            
+
     return request
 
 class Manager(object):
@@ -103,20 +373,48 @@ class Mutation:
     def __init__(self):
    
         self.manager=self.Manager(self.Meta.repository)
+    def _get(self,query):
+        results={}
+        for elem in query:
+            results[elem]=self.repository(elem.lower()).find(**query[elem])
+        return results
     
     def _create(self,query,data):
-        
-        _model=self.model(model)
-        d=data.copy()
+      
         def callback(model,query,data):
+            _model=self.model(model)
 
             for elem in _model.__annotations__:
                 if type(_model.__annotations__[elem])==ModelMetaclass:
                     submodel=_model.__annotations__[elem].__name__.lower()
-                    _submodel=self.model(submodel)
-                    d[elem]=_submodel.find_one({"id":data[elem]})
-            return _model(**d)
+                    #_submodel=self.model(submodel)
+                    
+                    if elem in data:
+                        data[elem]=self.repository(submodel).find_one(**{"id":data[elem]})
+            
+            self.repository(model).save(_model(**data))
         
+        if type(data)==list:
+            for model,dataset in data:
+                callback(model.lower(),query,dataset)
+        else:
+            callback(list(query)[0].lower(),query,data)
+    def _create_not_exists(self,query,data):
+        def callback(model,query,data):
+            _model=self.model(model)
+
+            for elem in _model.__annotations__:
+                if type(_model.__annotations__[elem])==ModelMetaclass:
+                    submodel=_model.__annotations__[elem].__name__.lower()
+                    #_submodel=self.model(submodel)
+                    
+                    if elem in data:
+                        data[elem]=self.repository(submodel).find_one(**{"id":data[elem]})
+        
+
+            if "id" in data and not self.repository(model).find_one(**{"id":data["id"]}):
+                self.repository(model).save(_model(**data))
+
         if type(data)==list:
             for model,dataset in data:
                 callback(model.lower(),query,dataset)
@@ -131,28 +429,34 @@ class Mutation:
             for elem in _model.__annotations__:
                 if type(_model.__annotations__[elem])==ModelMetaclass:
                     submodel=_model.__annotations__[elem].__name__.lower()
-                    _submodel=self.model(submodel)
-                    d[elem]=_submodel.update_one({"id":data[elem]["id"]},data[elem])
+                    _submodel=self.repository(submodel)
+                    #Esto es para simplificar agregar el id del documento y no el documento en si
+                    if elem in data["$set"]:
+                        #tambien aprovechamos de actualizar el documento en su colleccion
+                        _submodel.update_one({"id":query[elem]["id"]},data)            
+                        data["$set"][elem]=data["$set"][elem].id
+            print("#################",self.repository(model))
+            self.repository(model).update(query,data)
                     
         if type(data)==list:
             for model,dataset in data:
-                callback(model.lower(),query,dataset)
+                callback(model.lower(),query[model],dataset)
         else:
-            callback(list(query)[0].lower(),query,data)
+            callback(list(query)[0].lower(),query[list(query)[0]],data)
         
 
     def _delete(self,query):
         for model in query:
-            self.repository(model.lower()).delete(query[model])
+            self.repository(model.lower()).delete(**query[model])
 
-    def _evaluate(self,op,perm,query):
+    def _evaluate(self,user,op,perm,query):
         #por defecto los permisos de edicion de campos tienen que estar agregados
         #tambien es gerarquico si usa Model@modify_others quivala a Model.\w+@modify_others
 
         # modify=$set, rename=$rename, max=$max, remove=$unset, increment=$incr  
         import re
 
-        if self._schema.user.is_superuser:
+        if user.is_superuser:
             return True
         
         def check(op):
@@ -173,12 +477,12 @@ class Mutation:
 
                 are_others=False
                 for field in query:
-                    if getattr(self.user,field)!=query[field]:
+                    if getattr(user,field)!=query[field]:
                         are_others=True
                         break
 
                 if are_others:
-                    others=self.user.permissions["User."+user_others[0]+f"@{op}_others"]
+                    others=user.permissions["User."+user_others[0]+f"@{op}_others"]
                     if not others:
                         return True
                     else:
@@ -194,7 +498,7 @@ class Mutation:
 
             elif model_others:
                 if self._schema.has_perm(model_others[0]+f"@{op}_others"):#modelo
-                    if not self.user.permissions[perm]:
+                    if not user.permissions[perm]:
                         return True
                     else:
                         items=self.repository(model).find(query)
@@ -202,7 +506,7 @@ class Mutation:
                             return True
                     
                 elif self._schema.has_perm(perm):#campo
-                    if not self.user.permissions[perm]:
+                    if not user.permissions[perm]:
                         return True
                     else:
                         items=self.repository(model).find(query)
@@ -222,11 +526,11 @@ class Mutation:
                 elif self._schema.has_perm(perm):
           
                     items=self.repository(model).find(query)
-                    if self.schema.user.id in [item.user.id for item in items]:
+                    if user.id in [item.user.id for item in items]:
                         return True
         
         if op=="create":
-            return self._schema.has_perm(perm)
+            return user.has_perm(perm)
                 
         elif op=="rename":
             return check(op)
@@ -270,16 +574,16 @@ class Mutation:
 
 class Schema:
     def __init__(self,manager,query,mutations,user_manager):
-        
-
+        global schema
         self.manager=manager
         self._query=query
-       
+        self.sid=None
+        schema=self
         
         
         
         self.mutations=mutations
-        self.mutations._schema=self
+        self.mutations.schema=self
         self.user_manager=user_manager
         self.user=None
  
@@ -328,11 +632,16 @@ class Schema:
         import socketio
   
         # wrap with ASGI application
-        self.sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins="*")
+        self.sio = socketio.AsyncServer(
+            async_mode='asgi', 
+            cors_allowed_origins="*")
         return self.sio
 
 
-    async def _process(self,user,mutation,query=None,post=None,message=None,target=True):
+    async def _process(self,request):
+        mutation=request.data["<MUTATION>"]
+        post=request.data["<DATA>"]
+        message=request.data["<MESSAGE>"]
         """
         {
             {
@@ -348,50 +657,53 @@ class Schema:
             }
         }
         """
-        print("ffffff",dir(self.mutations))
+
         if  mutation in dir(self.mutations):
             try:
 
-                print(bool(post or query or message),post or query or message)
-                if post or query or message:
+                if "<DATA>" in request.data  or "<QUERY>" in request.data or message:
                   
                     m=getattr(self.mutations,mutation)
-
-                    if self.user:
-                        print("vvvvvvv",query)
-                        if "$set" in post:
+               
+                    if request.user:
+                 
+                        if request.data["<DATA>"] and "$set" in request.data["<DATA>"]:
                             for field in post["$set"]:
-                                print("eeeeee",list(query)[0],field)
+                                
                                 valid=self.mutations._evaluate(
+                                    request.user,
                                     "modify",
-                                    list(query)[0]+"."+field+"@modify",query)
+                                    list(request.data["<QUERY>"])[0]+"."+field+"@modify",request.data["<QUERY>"])
                                 if not valid:
                                     raise Exception("No tienes permisos suficientes")
-                        elif post and query:
+                        elif request.data["<DATA>"] and request.data["<QUERY>"]:
              
-                            valid=self.mutations._evaluate("create",list(query)[0]+"@create",query)
+                            valid=self.mutations._evaluate(request.user,"create",list(request.data["<QUERY>"])[0]+"@create",request.query)
                            
                             if not valid:
                                 raise Exception("No tienes permisos suficientes")
-                        else:
+                        elif  post:
                             raise Exception("Operaciones por el momento no permitidas")
-                        print("uuuuuu",m.__code__.co_varnames)
-                        if m.__code__.co_varnames[1]=="message":
-                            return await m(message,query,post,target)
+                        #el primero es self
+                        if m.__code__.co_varnames[1]=="request":
+                            
+                            return await m(request,message)
                         else:
-                            return await m(query,post)
+                            return await m(request.data["<QUERY>"],request.data["<DATA>"])
                 
                     elif "without_login" in dir(m):
 
                         # Pendiente de las mutaciones que no son por usuarios
                         # ejemplo publicaciones de anonimas 
-                        if m.__code__.co_varnames[1]=="message":
-                            return await m(message,query,post,target)
+
+                        if m.__code__.co_varnames[1]=="request":
+                            print("uuuuuu")
+                            return await m(request,message)
                         else:
-                            return await m(query,post)
+                            return await m(request.data["<QUERY>"],request.data["<DATA>"])
 
                     else:
-                       
+                        
                         raise Exception("Necesitas inciar sesion")
                
 
@@ -413,18 +725,7 @@ class Schema:
     def set_user(self,user):
         self.user=user
         
-    def has_perm(self,perm):
-        if self.user.is_superuser:
-            return True
-        if perm.count(".")==3:
-            _model,field,_perm=perm.split("@")
-        else:
-            field=None
-            _model,_perm=perm.split("@") 
 
-        if self.user and self.user.permissions and perm in self.user.permissions:
-            return True
-        return False
         
         
     def clear(self,data,model):
@@ -480,33 +781,32 @@ class Schema:
             return l
         else:
             return self.clear(data.dict(),model)
-    async def process(self,data,event=None):
+    async def process(self,request,event=None,sid=None):
         import json
+        data=request.data
         if event:
             data["<MUTATION>"]=event
+            request.target=request.data["<TARGET>"]
         if type(data)!=dict:
             raw=await data
             data=json.loads(raw)
         
+
+        
         instance=None
-        if "<POST>" in data:
-            instance=await self._process(
-                user=self.user,
-                mutation=data["<MUTATION>"],
-                query=data["<QUERY>"] if "<QUERY>" in data else None, 
-                post=data["<POST>"],
-                )
+        if "<POST>" in request.data:
+            instance=await self._process(request)
             l=[]
         
-            if "<GET>" in data:
+            if "<GET>" in request.data:
                
-                for model in data["<GET>"]:
+                for model in request.data["<GET>"]:
                     
                     if model=="$self" and instance:
                         #agregar el limpiador de campos visibles en query.yml
                         l.append(["self",
                             { k:v for k,v in filter(
-                                lambda item: item[0] in data["<GET>"]["$self"] if data["<GET>"]["$self"] else True,
+                                lambda item: item[0] in request.data["<GET>"]["$self"] if request.data["<GET>"]["$self"] else True,
                                 instance.dict().items())
                             }
                             ])
@@ -527,7 +827,7 @@ class Schema:
                                     l.append([model,
                                         self.serialize(
                                             mutation.Meta.repository.find(
-                                                **data["<GET>"][model]),
+                                                **request.data["<GET>"][model]),
                                             model)
                                         ])
 
@@ -552,67 +852,42 @@ class Schema:
                 response["response"]=l[0][1]
                 
             return self.jsonify(response),status
-        elif "<MESSAGE>" in data:
-            print("@@@@@@@@@@@@@@@@@@",data)
-            await self._process(
-                user=self.user,
-                mutation=data["<MUTATION>"],
-                query=data["<QUERY>"] if "<QUERY>" in data else None, 
-                post=data["<DATA>"],
-                message=data["<MESSAGE>"],
-                target=data["<TARGET>"]
-                )
+        elif "<MESSAGE>" in request.data:
 
-    def _emit(self,event,message,target=True):
-        if type(target)==bool:
-            self.sio.broadcast.emit(event,message)
-        else:
-            for conn in target:
-                self.sio
+            await self._process(request)
 
-    async def run(self,request,jsonify,abort,verify_password=None,ws=False):
+    async def emit(self,event,message,namespace,target=None): 
+
+        if not target:
+            await self.sio.emit(event,message)
+                
+        elif target:
+            await self.sio.emit(event,message,namespace=namespace,room=target)
+        
+        
+
+    async def run(self,request,jsonify,abort,verify_password=None,sid=None):
         import datetime
         self.jsonify=jsonify
         self.abort=abort
+        
 
+        
+        if "data" in dir(request):
+            return await self.process(request)
 
-        if 'Authorization' in request.headers:
-            import base64
-   
-            from uuid import uuid4
-      
-            token = request.headers['Authorization'].split(" ")[-1]
-       
-            user,password=base64.b64decode(token).decode("utf-8").split(":") 
-            
-            user=self.user_manager.find_one(username=user)
+def has_perm(user,perm):
+    if user.is_superuser:
+            return True
+    if perm.count(".")==3:
+        _model,field,_perm=perm.split("@")
+    else:
+        field=None
+        _model,_perm=perm.split("@") 
 
-            if verify_password(user.password,password):
-                obj_token={"token":str(uuid4()),"expire":datetime.datetime.today() + datetime.timedelta(days=1),"perms":user.permissions}
-                tokens=user.tokens
-                tokens.append(obj_token)
-                user.tokens=tokens
-
-                self.set_user(user)
-
-                self.user_manager.save(user)
-                return jsonify(obj_token)
-            else:
-                return jsonify({"token":None,"expire":None,"perms":{}}),404
-
-            
-        elif 'x-access-tokens' in request.headers:
-            token = request.headers['x-access-tokens']
-            user=self.user_manager.find_one(**{"tokens":{
-                "$elemMatch":{"token":token}}
-                })
-            request.user=user
-
-            self.set_user(user)
-            if "data" in dir(request):
-                return await self.process(request.data)
-
-     
+    if user and user.permissions and perm in user.permissions:
+        return True
+    return False    
 
 class  Permission:
     def __init__(self,user,permission):
