@@ -267,19 +267,8 @@ def need_login(fn):
     fn.need_login=True
     return fn
 
-def Request(environ,sid):
-    
-    request=type("request",(),environ["asgi.scope"])()
-
-    request.headers={k.decode("utf-8"):v.decode("utf-8") for k,v in request.headers}
-    from urllib.parse import urlparse, parse_qs
-
-    parsed_url = urlparse(request.query_string)
-    request.query=parse_qs(request.query_string.decode("utf-8"))
-    request.sid=sid
-
-    request.namespace=request.query["namespace"][0]
-    requests[sid]=request
+def Auth(request):
+    request.user=None
     if 'Authorization' in request.headers:
         import base64
 
@@ -320,6 +309,22 @@ def Request(environ,sid):
             })
 
         request.user=user
+    return request
+
+def Request(environ,sid):
+    
+    request=type("request",(),environ["asgi.scope"])()
+
+    request.headers={k.decode("utf-8"):v.decode("utf-8") for k,v in request.headers}
+    from urllib.parse import urlparse, parse_qs
+
+    parsed_url = urlparse(request.query_string)
+    request.query=parse_qs(request.query_string.decode("utf-8"))
+    request.sid=sid
+
+    request.namespace=request.query["namespace"][0]
+    requests[sid]=request
+    Auth(request)
             
 
     return request
@@ -443,7 +448,10 @@ class Mutation:
                 callback(model.lower(),query[model],dataset)
         else:
             callback(list(query)[0].lower(),query[list(query)[0]],data)
-        
+    
+    def _is_login(self,query,data):
+        return self.user
+
 
     def _delete(self,query):
         for model in query:
@@ -639,9 +647,14 @@ class Schema:
 
 
     async def _process(self,request):
-        mutation=request.data["<MUTATION>"]
-        post=request.data["<DATA>"]
-        message=request.data["<MESSAGE>"]
+        data=await request.json
+        print("vvvvvvv",data)
+        mutation=data["<MUTATION>"]
+        post=data["<DATA>"]
+        message=None
+        if "<MESSAGE>" in data:
+            message=data["<MESSAGE>"]
+        
         """
         {
             {
@@ -661,24 +674,24 @@ class Schema:
         if  mutation in dir(self.mutations):
             try:
 
-                if "<DATA>" in request.data  or "<QUERY>" in request.data or message:
+                if "<DATA>" in data  or "<QUERY>" in data or message:
                   
                     m=getattr(self.mutations,mutation)
                
                     if request.user:
                  
-                        if request.data["<DATA>"] and "$set" in request.data["<DATA>"]:
+                        if data["<DATA>"] and "$set" in data["<DATA>"]:
                             for field in post["$set"]:
                                 
                                 valid=self.mutations._evaluate(
                                     request.user,
                                     "modify",
-                                    list(request.data["<QUERY>"])[0]+"."+field+"@modify",request.data["<QUERY>"])
+                                    list(data["<QUERY>"])[0]+"."+field+"@modify",data["<QUERY>"])
                                 if not valid:
                                     raise Exception("No tienes permisos suficientes")
-                        elif request.data["<DATA>"] and request.data["<QUERY>"]:
+                        elif data["<DATA>"] and data["<QUERY>"]:
              
-                            valid=self.mutations._evaluate(request.user,"create",list(request.data["<QUERY>"])[0]+"@create",request.query)
+                            valid=self.mutations._evaluate(request.user,"create",list(data["<QUERY>"])[0]+"@create",request.query)
                            
                             if not valid:
                                 raise Exception("No tienes permisos suficientes")
@@ -689,20 +702,20 @@ class Schema:
                             
                             return await m(request,message)
                         else:
-                            return await m(request.data["<QUERY>"],request.data["<DATA>"])
+                            return await m(data["<QUERY>"],data["<DATA>"])
                 
                     elif "without_login" in dir(m):
 
                         # Pendiente de las mutaciones que no son por usuarios
                         # ejemplo publicaciones de anonimas 
 
-                        if m.__code__.co_varnames[1]=="request":
-                            print("uuuuuu")
+                        if m.__code__.co_varnames[2]=="message":
+                            
                             return await m(request,message)
                         else:
-                            return await m(request.data["<QUERY>"],request.data["<DATA>"])
+                            return await m(request,data["<QUERY>"],data["<DATA>"])
 
-                    else:
+                    elif data["<DATA>"]:
                         
                         raise Exception("Necesitas inciar sesion")
                
@@ -783,56 +796,61 @@ class Schema:
             return self.clear(data.dict(),model)
     async def process(self,request,event=None,sid=None):
         import json
-        data=request.data
+        data=await request.json
+
         if event:
             data["<MUTATION>"]=event
-            request.target=request.data["<TARGET>"]
+            request.target=data["<TARGET>"]
         if type(data)!=dict:
-            raw=await data
+            raw=data
             data=json.loads(raw)
-        
+        if data["<MUTATION>"]=="is_login":
+            return request.user!=None
 
-        
+    
         instance=None
-        if "<POST>" in request.data:
+        if "<DATA>" in data:
             instance=await self._process(request)
             l=[]
         
-            if "<GET>" in request.data:
-               
-                for model in request.data["<GET>"]:
+            if "<GET>" in data:
+                
+                for model in data["<GET>"]:
+
                     
                     if model=="$self" and instance:
                         #agregar el limpiador de campos visibles en query.yml
                         l.append(["self",
                             { k:v for k,v in filter(
-                                lambda item: item[0] in request.data["<GET>"]["$self"] if request.data["<GET>"]["$self"] else True,
+                                lambda item: item[0] in data["<GET>"]["$self"] if data["<GET>"]["$self"] else True,
                                 instance.dict().items())
                             }
                             ])
 
                     elif model[0].isupper():
-                  
+                        print("##############",self.mutations.__class__.__bases__)
                         for mutation in self.mutations.__class__.__bases__:
-                       
-
+                           
                             if "repository" not in dir(mutation.Meta):
                                 raise Exception(f"mutation '{mutation.__name__}' not has repository")
                          
                             if "Meta" in dir(mutation.Meta.repository) and \
                                 mutation.Meta.repository.Meta.model.__name__==model:
-
-                                if self.has_perm(f"{model}.show"):
+                                print("gggggggg",has_perm(request.user,f"{model}@show",self))
+                                if has_perm(request.user,f"{model}@show",self):
                                     
                                     l.append([model,
                                         self.serialize(
                                             mutation.Meta.repository.find(
-                                                **request.data["<GET>"][model]),
+                                                **data["<GET>"][model]),
                                             model)
                                         ])
+                                    print("gggggggg")
 
                                 else:
+                                    print("yyyyyyyy")
                                     return self.abort(503,description="Permissions denigate")
+
             
             response={"response":None,"error":None}
             status=200
@@ -850,9 +868,9 @@ class Schema:
                 
             elif len(l)==1:
                 response["response"]=l[0][1]
-                
+            print("lllllllllllll",response)    
             return self.jsonify(response),status
-        elif "<MESSAGE>" in request.data:
+        elif "<MESSAGE>" in data:
 
             await self._process(request)
 
@@ -876,17 +894,29 @@ class Schema:
         if "data" in dir(request):
             return await self.process(request)
 
-def has_perm(user,perm):
-    if user.is_superuser:
-            return True
+def has_perm(user,perm,schema):
     if perm.count(".")==3:
         _model,field,_perm=perm.split("@")
     else:
         field=None
+ 
         _model,_perm=perm.split("@") 
+  
+    if user:
+        if user.is_superuser:
+                return True
+        if user.permissions and perm in user.permissions:
+            return True
 
-    if user and user.permissions and perm in user.permissions:
-        return True
+    for model in schema.query:
+        schema.query[model]
+        
+        if model==_model:
+            
+            if field and field in schema.query[model]:
+                return True
+            elif "..." in schema.query[model]:
+                return True
     return False    
 
 class  Permission:
