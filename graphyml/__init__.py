@@ -1,7 +1,8 @@
 
 from pydantic.main import ModelMetaclass
 from dataclasses import dataclass
-
+from .utils.serialize import serialize
+import datetime
 privates={}
 public={}
 requests={}
@@ -270,16 +271,18 @@ def need_login(fn):
 def Auth(request):
     request.user=None
     if 'Authorization' in request.headers:
-        import base64
 
+        import base64
+        from .mongo import verify_password
         from uuid import uuid4
+        from quart import jsonify
   
         token = request.headers['Authorization'].split(" ")[-1]
    
         user,password=base64.b64decode(token).decode("utf-8").split(":") 
         
         user=schema.user_manager.find_one(username=user)
-
+      
         if verify_password(user.password,password):
             obj_token={"token":str(uuid4()),
                 "expire":datetime.datetime.today() + datetime.timedelta(days=1),
@@ -288,28 +291,42 @@ def Auth(request):
                 "username":user.username,
                 "email":user.email}
             tokens=user.tokens
+            if len(tokens)>10:
+                tokens=user.tokens[10:]
             tokens.append(obj_token)
             user.tokens=tokens
-            print(obj_token)
-
+            request.user=user
+          
 
 
             schema.user_manager.save(user)
-            return jsonify(obj_token)
+            return request,jsonify(obj_token)
         else:
-            return jsonify({"token":None,"expire":None,"perms":{}}),404
+            return request,jsonify({"token":None,"expire":None,"perms":{}})
 
         
     elif 'x-access-tokens' in request.headers:
+        from quart import jsonify
         token = request.headers['x-access-tokens']
-        print("OOOOOOOOOOOOOOOOOOO",schema)
+    
         
         user=schema.user_manager.find_one(**{"tokens":{
             "$elemMatch":{"token":token}}
             })
+       
+        if user:
+            request.user=user
+            obj_token={"token":token,
+                "expire":datetime.datetime.today() + datetime.timedelta(days=1),
+                "perms":user.permissions,
+                "id":str(user.id),
+                "username":user.username,
+                "email":user.email}
+            return request,jsonify(obj_token)
 
         request.user=user
-    return request
+
+    return request,None
 
 def Request(environ,sid):
     
@@ -347,7 +364,7 @@ class Manager(object):
             return []
     def save(self,instance):
       
-        self.repository.save(instance)
+        return self.repository.save(instance)
 
     def __call__(self,**query):
 
@@ -361,6 +378,117 @@ class Manager(object):
        
         return item
 
+def evaluate(user,perm,mutations):
+    #por defecto los permisos de edicion de campos tienen que estar agregados
+    #tambien es gerarquico si usa Model@modify_others equivala a Model.\w+@modify_others
+
+    # modify=$set, rename=$rename, max=$max, remove=$unset, increment=$incr  
+    import re
+    if not user:
+        permissions=mutations.schema.permissions
+        
+        re.findall(r"(\w+)@(\w+)",perm)
+        for perm2 in permissions:
+            print("tttttt",[perm,perm2])
+            if perm==perm2:
+                return True
+
+    elif user.is_superuser:
+        return True
+    else:
+        print("@@@@@@@@@@@@@@@@@@@@@")
+        permissions=mutations.schema.permissions
+        
+        re.findall(r"(\w+)@(\w+)",perm)
+        for perm2 in permissions:
+            print("zzzzzzz",[perm,perm2])
+            if perm==perm2:
+                return True
+
+        def check(op):
+            #user
+            user_others=re.findall(rf"User\.(\w+)@{op}_others",perm)
+            user_own=re.findall(rf"User\.(\w+)@{op}_own",perm)
+            
+            #pertenencia 
+            #permisologia
+            
+            model_others=re.findall(rf"(\w+)\.(\w+)@{op}_others",perm) #tiene accesso en el campo user.permission
+            model_own=re.findall(rf"(\w+)\.(\w+)@{op}_own",perm) #tiene un campo referenciando al usuario
+            
+            if user_others:
+
+                if mutations._schema.has_perm(f"User@{op}_others"):
+                    return True
+
+                are_others=False
+                for field in query:
+                    if getattr(user,field)!=query[field]:
+                        are_others=True
+                        break
+
+                if are_others:
+                    others=user.permissions["User."+user_others[0]+f"@{op}_others"]
+                    if not others:
+                        return True
+                    else:
+                        users=self.repository("user").find(query)
+                        if not set([user.id for user in users]).difference(set(others)):
+                            return True                            
+           
+            elif user_own:
+                if mutations._schema.has_perm(f"User@{op}_own"):
+                    return True
+                elif mutations._schema.has_perm(perm):
+                    return True
+
+            elif model_others:
+                if mutations._schema.has_perm(model_others[0]+f"@{op}_others"):#modelo
+                    if not user.permissions[perm]:
+                        return True
+                    else:
+                        items=self.repository(model).find(query)
+                        if not set([item.id for item in items]).difference(set(user.permissions[perm])):
+                            return True
+                    
+                elif mutations._schema.has_perm(perm):#campo
+                    if not user.permissions[perm]:
+                        return True
+                    else:
+                        items=mutations.repository(model).find(query)
+                        if not set([item.id for item in items]).difference(set(user.permissions[perm])):
+                            return True
+
+            elif model_own:
+                model=model_own[0].lower()
+                if mutations._schema.has_perm(model_own[0]+f"@{op}_own"):
+                    if not user.permissions[perm]:
+                        return True
+                    else:
+                        items=self.repository(model).find({**query ,"user.id":user.id})
+                        if not set([item.id for item in items]).difference(set(user.permissions[perm])):
+                            return True
+                
+                elif mutations._schema.has_perm(perm):
+          
+                    items=mutations.repository(model).find(query)
+                    if user.id in [item.user.id for item in items]:
+                        return True
+        
+        if op=="create":
+            return user.has_perm(perm)
+                
+        elif op=="rename":
+            return check(op)
+        elif op=="max":
+            return check(op)
+        elif op=="modify":
+            return check(op)
+        elif op=="delete":
+            return check(op)            
+        
+        print("qqqqqqqqqqqqq ",perm)
+    return False
 
 class Mutation:
     """
@@ -383,10 +511,14 @@ class Mutation:
         for elem in query:
             results[elem]=self.repository(elem.lower()).find(**query[elem])
         return results
+    async def get(self,request,query,data):
+        self._get(query)
+
     
-    def _create(self,query,data):
-      
-        def callback(model,query,data):
+    
+    def _create(self,data):
+        instances=[]
+        def callback(model,data):
             _model=self.model(model)
 
             for elem in _model.__annotations__:
@@ -395,17 +527,40 @@ class Mutation:
                     #_submodel=self.model(submodel)
                     
                     if elem in data:
-                        data[elem]=self.repository(submodel).find_one(**{"id":data[elem]})
-            
-            self.repository(model).save(_model(**data))
+                
+                        item=self.repository(submodel).find_one(**{"id":data[elem]})
+                        d=dict(item)
+                 
+                        del d["tokens"]
+               
+                        data[elem]=item
+            item=_model(**data)
+      
+            return self.repository(model).save(item)
         
+    
         if type(data)==list:
             for model,dataset in data:
-                callback(model.lower(),query,dataset)
+                instances.append(callback(model.lower(),dataset))
         else:
-            callback(list(query)[0].lower(),query,data)
-    def _create_not_exists(self,query,data):
-        def callback(model,query,data):
+            
+            for model in  data:
+                instances.append(callback(model.lower(),data[model]))
+
+       
+        if len(instances)>1:
+            return instances
+        else:
+            return instances[0]
+
+    async def create(self,request,query,data):
+        d=self._create(data)
+        print("AAAAAAAAAAAAAAA")
+        return d
+
+    def _create_not_exists(self,data):
+        
+        def callback(model,data):
             _model=self.model(model)
 
             for elem in _model.__annotations__:
@@ -422,11 +577,15 @@ class Mutation:
 
         if type(data)==list:
             for model,dataset in data:
-                callback(model.lower(),query,dataset)
+                callback(model.lower(),dataset)
         else:
-            callback(list(query)[0].lower(),query,data)
+            for model,dataset in data:
+                callback(list(query)[0].lower(),data[model])
+
+    
     
     def _modify(self,query,data):
+        instances=[]
         def callback(model,query,data):
             _model=self.model(model)
             d=data.copy()
@@ -445,114 +604,17 @@ class Mutation:
                     
         if type(data)==list:
             for model,dataset in data:
-                callback(model.lower(),query[model],dataset)
+                instances.append(callback(model.lower(),query[model],dataset))
+        elif query:
+            for q in query:
+                instances.append(callback(q.lower(),query[q],data))
+
+        if len(instances)>1:
+            return instances
         else:
-            callback(list(query)[0].lower(),query[list(query)[0]],data)
+            return instances[0]
     
-    def _is_login(self,query,data):
-        return self.user
-
-
-    def _delete(self,query):
-        for model in query:
-            self.repository(model.lower()).delete(**query[model])
-
-    def _evaluate(self,user,op,perm,query):
-        #por defecto los permisos de edicion de campos tienen que estar agregados
-        #tambien es gerarquico si usa Model@modify_others quivala a Model.\w+@modify_others
-
-        # modify=$set, rename=$rename, max=$max, remove=$unset, increment=$incr  
-        import re
-
-        if user.is_superuser:
-            return True
-        
-        def check(op):
-            #user
-            user_others=re.findall(rf"User\.(\w+)@{op}_others",perm)
-            user_own=re.findall(rf"User\.(\w+)@{op}_own",perm)
-            
-            #pertenencia 
-            #permisologia
-            
-            model_others=re.findall(rf"(\w+)\.(\w+)@{op}_others",perm) #tiene accesso en el campo user.permission
-            model_own=re.findall(rf"(\w+)\.(\w+)@{op}_own",perm) #tiene un campo referenciando al usuario
-            
-            if user_others:
-
-                if self._schema.has_perm(f"User@{op}_others"):
-                    return True
-
-                are_others=False
-                for field in query:
-                    if getattr(user,field)!=query[field]:
-                        are_others=True
-                        break
-
-                if are_others:
-                    others=user.permissions["User."+user_others[0]+f"@{op}_others"]
-                    if not others:
-                        return True
-                    else:
-                        users=self.repository("user").find(query)
-                        if not set([user.id for user in users]).difference(set(others)):
-                            return True                            
-           
-            elif user_own:
-                if self._schema.has_perm(f"User@{op}_own"):
-                    return True
-                elif self._schema.has_perm(perm):
-                    return True
-
-            elif model_others:
-                if self._schema.has_perm(model_others[0]+f"@{op}_others"):#modelo
-                    if not user.permissions[perm]:
-                        return True
-                    else:
-                        items=self.repository(model).find(query)
-                        if not set([item.id for item in items]).difference(set(self.user.permissions[perm])):
-                            return True
-                    
-                elif self._schema.has_perm(perm):#campo
-                    if not user.permissions[perm]:
-                        return True
-                    else:
-                        items=self.repository(model).find(query)
-                        if not set([item.id for item in items]).difference(set(self.user.permissions[perm])):
-                            return True
-
-            elif model_own:
-                model=model_own[0].lower()
-                if self._schema.has_perm(model_own[0]+f"@{op}_own"):
-                    if not self.user.permissions[perm]:
-                        return True
-                    else:
-                        items=self.repository(model).find({**query ,"user.id":self.user.id})
-                        if not set([item.id for item in items]).difference(set(self.user.permissions[perm])):
-                            return True
-                
-                elif self._schema.has_perm(perm):
-          
-                    items=self.repository(model).find(query)
-                    if user.id in [item.user.id for item in items]:
-                        return True
-        
-        if op=="create":
-            return user.has_perm(perm)
-                
-        elif op=="rename":
-            return check(op)
-        elif op=="max":
-            return check(op)
-        elif op=="modify":
-            return check(op)
-        elif op=="delete":
-            return check(op)            
-
-
-        return False
-    
-    async def post(self,query,data):
+    async def update(self,query,data):
 
         self._modify(query,data)
         """
@@ -563,10 +625,27 @@ class Mutation:
             else:
                 instance=self.model(model.lower())(data)
                 self.repository(model.lower()).save(instance)
-        """     
+        """   
+
+    def _delete(self,query):
+        for model in query:
+            self.repository(model.lower()).delete(**query[model])
+
+    
+      
 
     async def delete(self,query,data):
         self._delete(query)
+
+    def _event(self,request,message,target,query={},data={}):
+        if query:
+            self._create(data)
+        else:
+            self._modify(query,data)
+
+        self.schema.emit(message,target) 
+
+
 
 
     def repository(self,name):
@@ -578,6 +657,11 @@ class Mutation:
         for elem in self.__class__.__bases__:
             if elem.Meta.model.__name__.lower()==name:
                 return elem.Meta.model
+
+    def has_perm(self,name,perm):
+        for elem in self.__class__.__bases__:
+            if elem.Meta.model.__name__.lower()==name:
+                return perm in elem.Meta.permissions
 
 
 class Schema:
@@ -600,6 +684,7 @@ class Schema:
                 "username":"admin",
                 "password":"1234",
                 "permissions":{},
+                "tokens":[],
                 })
     def need(self,*permissions):
         def wrapper(fn):
@@ -622,18 +707,22 @@ class Schema:
     @property
     def permissions(self):
         _permissions=[]
+  
         for line in self.query:
             raw=line.split(" ")
             if " " in raw:
                 raw.remove(" ")
             _model,*permissions=raw
+            _permissions.append(_model+"@show")
             for elem in permissions:
-                _permissions.append(_model+elem)          
+                _permissions.append(_model+"@"+elem)      
+
             for field in self.query[line]:
                 name,*field_permissions=field.split(" ")
-                fields.remove(name)
+                #fields.remove(name)
                 for perm in field_permissions:
-                    _permissions.append(_model+"."+name+perm)
+                    _permissions.append(_model+"."+name+"@"+perm)
+
         return _permissions
 
     def socket(self,app):
@@ -670,53 +759,110 @@ class Schema:
             }
         }
         """
-
+        
         if  mutation in dir(self.mutations):
             try:
 
-                if "<DATA>" in data  or "<QUERY>" in data or message:
-                  
+                if "<DATA>" in data:
+                    
+
                     m=getattr(self.mutations,mutation)
-               
+                    print("cccccccc",request.user)
                     if request.user:
-                 
+                        print("##########################")
+                        print("VERIFICANDO PERMISOS USUARIOS")
+                        print("ESCRITURA")
+                        """
                         if data["<DATA>"] and "$set" in data["<DATA>"]:
+
                             for field in post["$set"]:
                                 
-                                valid=self.mutations._evaluate(
+                                valid=evaluate(
                                     request.user,
                                     "modify",
                                     list(data["<QUERY>"])[0]+"."+field+"@modify",data["<QUERY>"])
                                 if not valid:
                                     raise Exception("No tienes permisos suficientes")
-                        elif data["<DATA>"] and data["<QUERY>"]:
-             
-                            valid=self.mutations._evaluate(request.user,"create",list(data["<QUERY>"])[0]+"@create",request.query)
-                           
-                            if not valid:
-                                raise Exception("No tienes permisos suficientes")
+                        """
+                        if data["<DATA>"]:
+                            
+                            #valid=evaluate(request.user,"create",list(data["<QUERY>"])[0]+"@create",request.query)
+                            for model in data["<DATA>"]:
+                                if data["<QUERY>"]:
+                                    valid=evaluate(
+                                            request.user,
+                                            model+"@modify",
+                                            self.mutations,
+                                           )
+                                else:
+                                    valid=evaluate(
+                                            request.user,
+                                            model+"@create",
+                                            self.mutations,
+                                           )
+                                if not valid:
+                                    raise Exception("No tienes permisos suficientes")
+
+                        """
                         elif  post:
                             raise Exception("Operaciones por el momento no permitidas")
+                        """
                         #el primero es self
+                        print("vvvvvvvvv",m.__code__.co_varnames[1])
                         if m.__code__.co_varnames[1]=="request":
-                            
-                            return await m(request,message)
-                        else:
-                            return await m(data["<QUERY>"],data["<DATA>"])
+                            print("kkkkkkkkkkkk")
+                            return await m(request,data["<QUERY>"],data["<DATA>"])
+                        
+                        elif "<MESSAGE>" in data:
+                            print("ñññññññññññññ")
+                            return await m(request,
+                                message,
+                                data["<TARGET>"],
+                                data["<QUERY>"],
+                                data["<DATA>"])
+                        print("ooooooooooooooooooooooo")
+                    
                 
                     elif "without_login" in dir(m):
 
                         # Pendiente de las mutaciones que no son por usuarios
                         # ejemplo publicaciones de anonimas 
+                        print("IIIIIIIIIIIIIIIIIIIIIIIII")
+                        print("VERIFICANDO PERMISOS PUBLICOS")
+                        print("ESCRITURA")
 
                         if m.__code__.co_varnames[2]=="message":
                             
-                            return await m(request,message)
+                            return await m(request,
+                                message,
+                                data["<TARGET>"])
+                    
                         else:
                             return await m(request,data["<QUERY>"],data["<DATA>"])
-
-                    elif data["<DATA>"]:
                         
+                    elif not request.user and  data["<DATA>"]:
+                        print("##########################")
+                        print("VERIFICANDO PERMISOS PUBLICOS")
+                        print("ESCRITURA")
+
+                        valid=True
+                        for model in data["<DATA>"]:
+                            valid=evaluate(
+                                    None,
+                                    model+"@create",
+                                    self.mutations,
+                                   )
+                            if not valid:
+                                raise Exception("No tienes permisos suficientes")
+                        if m.__code__.co_varnames[2]=="message":
+                            
+                            return await m(request,
+                                message,
+                                data["<TARGET>"])
+                    
+                        else:
+                            return await m(request,data["<QUERY>"],data["<DATA>"])
+                    else:
                         raise Exception("Necesitas inciar sesion")
                
 
@@ -741,59 +887,12 @@ class Schema:
 
         
         
-    def clear(self,data,model):
-        """
-        permissos show
-        """
-        if self.user.is_superuser:
-            return data
-        fields=list(data.keys())
-        for line in self.query:
-            
-            
-            raw=line.split(" ")
-       
-            if " " in raw:
-                raw.remove(" ")
-            _model,*permissions=raw
-            
-            if model==_model:
-                for perm in permissions:
-                    if perm not in user.permissions:
-                        return None
-                #El modelo es visible
-          
-                for field in self.query[line]:
-                    name,*field_permissions=field.split(" ")
-                    fields.remove(name)
-                    for perm in field_permissions:
-                        if perm not in user.permissions:
-                            data.pop(name)
- 
-        for field in fields:
-            data.pop(field)
-        return data
+    
             
 
             
     
-    def serialize(self,data,model=None,user=None):
-        from bson.json_util import dumps
-        import json
-        l=[]
-        def generator():
-            yield None
-        if type(data)==type(generator() ):
-            items=json.loads(dumps(list(data)))
-            for item in items:
-                d={}
-                for elem in item:
-                    d[elem[0]]=elem[1]
-                l.append(self.clear(d,model))
-
-            return l
-        else:
-            return self.clear(data.dict(),model)
+    
     async def process(self,request,event=None,sid=None):
         import json
         data=await request.json
@@ -804,31 +903,46 @@ class Schema:
         if type(data)!=dict:
             raw=data
             data=json.loads(raw)
-        if data["<MUTATION>"]=="is_login":
-            return request.user!=None
 
     
         instance=None
+  
         if "<DATA>" in data:
             instance=await self._process(request)
             l=[]
-        
+     
             if "<GET>" in data:
-                
+                print("AAAAAAAAAAAA")
                 for model in data["<GET>"]:
 
                     
                     if model=="$self" and instance:
                         #agregar el limpiador de campos visibles en query.yml
-                        l.append(["self",
-                            { k:v for k,v in filter(
-                                lambda item: item[0] in data["<GET>"]["$self"] if data["<GET>"]["$self"] else True,
-                                instance.dict().items())
-                            }
-                            ])
+              
+                        data["<GET>"]
+                        if type(instance)==tuple:
+                            pass
+                        else:
+
+                            # {$self:[field1,field2]}
+                            if type(data["<GET>"])==dict:
+
+                                l.append(["self",
+                                    serialize({ k:v for k,v in filter(
+                                        lambda item: item[0] in data["<GET>"]["$self"] if data["<GET>"]["$self"] else True,
+                                        instance.dict().items())
+                                    },model=instance.__class__.__name__,
+                                    user=request.user,
+                                    schema=self)
+                                    ])
+                            else:
+                                l.append(["self",serialize(instance,
+                                    model=instance.__class__.__name__,
+                                    user=request.user,
+                                    schema=self)])
 
                     elif model[0].isupper():
-                        print("##############",self.mutations.__class__.__bases__)
+                        print("PPPPPPPPPPPPP")
                         for mutation in self.mutations.__class__.__bases__:
                            
                             if "repository" not in dir(mutation.Meta):
@@ -836,24 +950,27 @@ class Schema:
                          
                             if "Meta" in dir(mutation.Meta.repository) and \
                                 mutation.Meta.repository.Meta.model.__name__==model:
-                                print("gggggggg",has_perm(request.user,f"{model}@show",self))
+                                print("///////////////////")
                                 if has_perm(request.user,f"{model}@show",self):
                                     
                                     l.append([model,
-                                        self.serialize(
+                                        serialize(
                                             mutation.Meta.repository.find(
                                                 **data["<GET>"][model]),
-                                            model)
+                                            model=model,
+                                            user=request.user,
+                                            schema=self)
                                         ])
-                                    print("gggggggg")
+                         
 
                                 else:
-                                    print("yyyyyyyy")
+                       
                                     return self.abort(503,description="Permissions denigate")
 
             
             response={"response":None,"error":None}
             status=200
+       
             if isinstance(instance,Exception):
             
                 if self.user and self.user.is_superuser:
@@ -868,7 +985,7 @@ class Schema:
                 
             elif len(l)==1:
                 response["response"]=l[0][1]
-            print("lllllllllllll",response)    
+          
             return self.jsonify(response),status
         elif "<MESSAGE>" in data:
 
@@ -904,19 +1021,15 @@ def has_perm(user,perm,schema):
   
     if user:
         if user.is_superuser:
-                return True
+            return True
         if user.permissions and perm in user.permissions:
             return True
+    print("===============",perm)
+    for perm2 in schema.permissions:
+        if perm==perm2:
+            return True
 
-    for model in schema.query:
-        schema.query[model]
         
-        if model==_model:
-            
-            if field and field in schema.query[model]:
-                return True
-            elif "..." in schema.query[model]:
-                return True
     return False    
 
 class  Permission:
