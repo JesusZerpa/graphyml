@@ -12,7 +12,7 @@ schema=None
 class Model:
     def __init__(self,**fields):
         super(Model).__init__()
-        print("BBBBBBBBB",fields)
+    
         for elem in self.__annotations__:
             if elem in fields:
                  setattr(self,elem,fields[elem])
@@ -401,7 +401,7 @@ def evaluate(user,perm,mutations):
         
         re.findall(r"(\w+)@(\w+)",perm)
         for perm2 in permissions:
-            print("zzzzzzz",[perm,perm2])
+        
             if perm==perm2:
                 return True
 
@@ -555,7 +555,7 @@ class Mutation:
 
     async def create(self,request,query,data):
         d=self._create(data)
-        print("AAAAAAAAAAAAAAA")
+       
         return d
 
     def _create_not_exists(self,data):
@@ -595,6 +595,7 @@ class Mutation:
                     submodel=_model.__annotations__[elem].__name__.lower()
                     _submodel=self.repository(submodel)
                     #Esto es para simplificar agregar el id del documento y no el documento en si
+                    print("kkkkkkkkkk",elem,submodel,data)
                     if elem in data["$set"]:
                         #tambien aprovechamos de actualizar el documento en su colleccion
                         _submodel.update_one({"id":query[elem]["id"]},data)            
@@ -607,15 +608,15 @@ class Mutation:
                 instances.append(callback(model.lower(),query[model],dataset))
         elif query:
             for q in query:
-                instances.append(callback(q.lower(),query[q],data))
+                instances.append(callback(q.lower(),query[q],data[q]))
 
         if len(instances)>1:
             return instances
         else:
             return instances[0]
     
-    async def update(self,query,data):
-
+    async def update(self,request,query,data):
+        print("ZZZZZZZZZZZZ",query,data)
         self._modify(query,data)
         """
         for model in query:
@@ -767,7 +768,7 @@ class Schema:
                     
 
                     m=getattr(self.mutations,mutation)
-                    print("cccccccc",request.user)
+                    
                     if request.user:
                         print("##########################")
                         print("VERIFICANDO PERMISOS USUARIOS")
@@ -808,26 +809,26 @@ class Schema:
                             raise Exception("Operaciones por el momento no permitidas")
                         """
                         #el primero es self
-                        print("vvvvvvvvv",m.__code__.co_varnames[1])
+                      
                         if m.__code__.co_varnames[1]=="request":
-                            print("kkkkkkkkkkkk")
+                          
                             return await m(request,data["<QUERY>"],data["<DATA>"])
                         
                         elif "<MESSAGE>" in data:
-                            print("ñññññññññññññ")
+                           
                             return await m(request,
                                 message,
                                 data["<TARGET>"],
                                 data["<QUERY>"],
                                 data["<DATA>"])
-                        print("ooooooooooooooooooooooo")
+                       
                     
                 
                     elif "without_login" in dir(m):
 
                         # Pendiente de las mutaciones que no son por usuarios
                         # ejemplo publicaciones de anonimas 
-                        print("IIIIIIIIIIIIIIIIIIIIIIIII")
+                      
                         print("VERIFICANDO PERMISOS PUBLICOS")
                         print("ESCRITURA")
 
@@ -912,7 +913,7 @@ class Schema:
             l=[]
      
             if "<GET>" in data:
-                print("AAAAAAAAAAAA")
+                
                 for model in data["<GET>"]:
 
                     
