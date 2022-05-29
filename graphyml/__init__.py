@@ -396,7 +396,7 @@ def evaluate(user,perm,mutations):
     elif user.is_superuser:
         return True
     else:
-        print("@@@@@@@@@@@@@@@@@@@@@")
+      
         permissions=mutations.schema.permissions
         
         re.findall(r"(\w+)@(\w+)",perm)
@@ -487,7 +487,7 @@ def evaluate(user,perm,mutations):
         elif op=="delete":
             return check(op)            
         
-        print("qqqqqqqqqqqqq ",perm)
+     
     return False
 
 class Mutation:
@@ -595,12 +595,12 @@ class Mutation:
                     submodel=_model.__annotations__[elem].__name__.lower()
                     _submodel=self.repository(submodel)
                     #Esto es para simplificar agregar el id del documento y no el documento en si
-                    print("kkkkkkkkkk",elem,submodel,data)
+           
                     if elem in data["$set"]:
                         #tambien aprovechamos de actualizar el documento en su colleccion
                         _submodel.update_one({"id":query[elem]["id"]},data)            
                         data["$set"][elem]=data["$set"][elem].id
-            print("#################",self.repository(model))
+           
             self.repository(model).update(query,data)
                     
         if type(data)==list:
@@ -616,7 +616,7 @@ class Mutation:
             return instances[0]
     
     async def update(self,request,query,data):
-        print("ZZZZZZZZZZZZ",query,data)
+
         self._modify(query,data)
         """
         for model in query:
@@ -738,7 +738,7 @@ class Schema:
 
     async def _process(self,request):
         data=await request.json
-        print("vvvvvvv",data)
+ 
         mutation=data["<MUTATION>"]
         post=data["<DATA>"]
         message=None
@@ -770,9 +770,7 @@ class Schema:
                     m=getattr(self.mutations,mutation)
                     
                     if request.user:
-                        print("##########################")
-                        print("VERIFICANDO PERMISOS USUARIOS")
-                        print("ESCRITURA")
+           
                         """
                         if data["<DATA>"] and "$set" in data["<DATA>"]:
 
@@ -829,9 +827,7 @@ class Schema:
                         # Pendiente de las mutaciones que no son por usuarios
                         # ejemplo publicaciones de anonimas 
                       
-                        print("VERIFICANDO PERMISOS PUBLICOS")
-                        print("ESCRITURA")
-
+                        
                         if m.__code__.co_varnames[2]=="message":
                             
                             return await m(request,
@@ -842,9 +838,7 @@ class Schema:
                             return await m(request,data["<QUERY>"],data["<DATA>"])
                         
                     elif not request.user and  data["<DATA>"]:
-                        print("##########################")
-                        print("VERIFICANDO PERMISOS PUBLICOS")
-                        print("ESCRITURA")
+              
 
                         valid=True
                         for model in data["<DATA>"]:
@@ -869,7 +863,7 @@ class Schema:
 
 
             except Exception as e:
-                print("tttttttt",e)
+         
                 import traceback
                 from io import  StringIO
                 s=StringIO()
@@ -943,7 +937,7 @@ class Schema:
                                     schema=self)])
 
                     elif model[0].isupper():
-                        print("PPPPPPPPPPPPP")
+                    
                         for mutation in self.mutations.__class__.__bases__:
                            
                             if "repository" not in dir(mutation.Meta):
@@ -951,7 +945,7 @@ class Schema:
                          
                             if "Meta" in dir(mutation.Meta.repository) and \
                                 mutation.Meta.repository.Meta.model.__name__==model:
-                                print("///////////////////")
+
                                 if has_perm(request.user,f"{model}@show",self):
                                     
                                     l.append([model,
@@ -1025,7 +1019,7 @@ def has_perm(user,perm,schema):
             return True
         if user.permissions and perm in user.permissions:
             return True
-    print("===============",perm)
+
     for perm2 in schema.permissions:
         if perm==perm2:
             return True
