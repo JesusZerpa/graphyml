@@ -8,7 +8,11 @@ def serialize(data,model=None,user=None,schema=None):
         yield None
     if type(data)==type(generator() ):
         for item in data:
-            print("&&&&&&&",)
+            for elem in item:
+
+                if callable(elem[1]):
+                    setattr(item,elem[0],elem[1]())
+
             d={}
             for elem in json.loads(dumps(item)):
                 

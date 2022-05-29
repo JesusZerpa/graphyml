@@ -4,7 +4,7 @@ from mongomantic import BaseRepository, MongoDBModel,Index
 from datetime import datetime
 from pydantic import validator
 import  hashlib,os,binascii
-from typing import  List
+from typing import  List,Dict
 from bson import ObjectId
 def connect(host,db):
     from mongomantic import BaseRepository, MongoDBModel, connect
@@ -45,7 +45,7 @@ class User(MongoDBModel):
     meta:dict={}
     tokens:List[dict]=[]
     is_superuser:bool=False
-    permissions:dict[str,list]=None
+    permissions:Dict[str,list]=None
     @validator('password')
     def hash_password(cls, pw: str) -> str:
         if is_hash(pw):

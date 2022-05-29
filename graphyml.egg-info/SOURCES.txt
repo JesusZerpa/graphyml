@@ -4,7 +4,7 @@ setup.cfg
 setup.py
 graphyml/__init__.py
 graphyml/mongo.py
-graphyml/sqlalchemyst.py
+graphyml/sql.py
 graphyml.egg-info/PKG-INFO
 graphyml.egg-info/SOURCES.txt
 graphyml.egg-info/dependency_links.txt
