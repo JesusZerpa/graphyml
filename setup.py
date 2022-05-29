@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
 	name="graphyml",
-	packages=["graphyml"],
+	packages=["graphyml","graphyml/utils"],
 	version="0.0.2",
 	description="Este paquete es una alternativa a graphql que utiliza con YAML como lenguaje de query",
 	author="Jesus Zerpa",

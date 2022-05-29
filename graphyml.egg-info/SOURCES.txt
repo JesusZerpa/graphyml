@@ -9,3 +9,6 @@ graphyml.egg-info/PKG-INFO
 graphyml.egg-info/SOURCES.txt
 graphyml.egg-info/dependency_links.txt
 graphyml.egg-info/top_level.txt
+graphyml/utils/__init__.py
+graphyml/utils/clear.py
+graphyml/utils/serialize.py
